@@ -1,0 +1,221 @@
+---
+title: "Patient Outcomes for 2 Drug Combinations In Cerebral Palsy Patients"
+author: "Alex Cory"
+date: "2025-05-07"
+output:
+  pdf_document: default
+  html_document:
+    self_contained: true
+---
+
+```{r setup, include=FALSE, purl=FALSE}
+# Use echo = FALSE for Portfolio assignments
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+
+```{r metadata}
+# Author:  Alex Cory
+# Date:    2025-05-07
+# Purpose: Patient Outcomes for 2 Drug Combinations In Cerebral Palsy Patients
+#-------------------------------------------------------------------------------
+```
+
+
+```{r packages}
+# Load packages
+suppressPackageStartupMessages(library("tidyverse")); theme_set(theme_bw())
+library("knitr")
+```
+
+
+
+## Introduction
+
+The data used in this analysis is synthetic data for corticosteroids and antiviral agents as treatment for Bell's Palsy. It was generated to simulate but obfuscate findings from the study *Early Treatment with Prednisolone or Acyclovir in Bell's Palsy* by Sullivan et al (2007).
+
+The full journal can be found in the New England Journal of Medicine: https://www.nejm.org/doi/full/10.1056/nejmoa072006#
+
+The Kaggle dataset can be found here: https://www.kaggle.com/datasets/dillonmyrick/bells-palsy-clinical-trial?resource=download
+
+The scientific question we seek to answer is: How does early treatment of Bell's Palsy with a combination of Prednisolone, Acyclovir, and placebo effect outcomes over a 3 month period
+
+## Data
+```{r}
+data <- read.csv("Bells Palsy Clinical Trial.csv")
+```
+
+The dataset contains `r nrow(data)` observations, with each row representing a patient. Each patient receives two pills, one being a steroid (Prednisolone) or placebo, and the other being an antiviral (Acyclovir) or placebo.
+
+```{r recovery-summary, message=FALSE}
+#Proportions of each Treatment Group
+recovery_summary <- data %>%
+  group_by(Treatment.Group) %>%
+  summarise(
+    N = n(),
+    Full_Recovery_Count = sum(Full.Recovery.in.3.Months == "Yes", na.rm = TRUE),
+    Full_Recovery_Proportion = mean(Full.Recovery.in.3.Months == "Yes", na.rm = TRUE),
+    Full_Recovery_Percent = scales::percent(Full_Recovery_Proportion)
+  ) %>%
+  arrange(desc(Full_Recovery_Proportion))
+
+knitr::kable(recovery_summary, 
+             col.names = c("Treatment Group", "Subjects in Group", "Number Recovered", "Proportion", "%"),
+             align = c("l", "c", "c", "c", "c"),
+             caption = "Proportion of Full Recovery by Treatment Group Over 3 Month Period")
+```
+
+
+```{r, include=FALSE}
+#Removed to avoid using Treatment.Group column
+ggplot(data, aes(x = Treatment.Group, fill = Full.Recovery.in.3.Months)) +
+  geom_bar(position = 'fill') +
+  labs(
+    title = "Full Recovery by Treatment Group at 3 Months",
+    x = "Treatment Group",
+    y = "Proportion of Patients",
+    fill = "Full Recovery"
+  ) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9")) +  
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  
+
+```
+
+```{r}
+#Note to grader: I couldn't reasonably use shape or color to visualize this in a meaningful way
+#I hope you are okay with me using a facet to display both
+label_data <- data %>%
+  group_by(Received.Prednisolone, Received.Acyclovir, Full.Recovery.in.3.Months) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(Received.Prednisolone, Received.Acyclovir) %>%
+  mutate(
+    prop = count/sum(count),
+    ypos = cumsum(prop) - 0.5*prop
+  )
+
+facet_labels <- c(
+  "No" = "No Acyclovir Treatment", 
+  "Yes" = "Acyclovir Treatment"
+)
+
+ggplot(data, aes(x = factor(Received.Prednisolone), 
+                fill = factor(Full.Recovery.in.3.Months))) +
+  geom_bar(position = "fill") +
+  
+  facet_wrap(~ factor(Received.Acyclovir), 
+             labeller = labeller(.cols = facet_labels)) +
+  
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(
+    values = c("#56B4E9", "#E69F00"),
+    labels = c("Recovered", "Not Recovered")
+  ) +
+  labs(
+    title = "Full Recovery Rate by Treatment Group at 3 Months",
+    x = "Prednisolone Treatment",
+    y = "Proportion of Patients",
+    fill = "Recovery Status"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "top",
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(face = "bold")
+  )
+
+```
+<br>
+From our data we observe that the group with the best 3 month outcome is the Prednisolone-Placebo group (84.4% Recovery), and the worst is the Acyclovir-Placebo group (61.4% Recovery). This suggests evidence that Prednisolone performs better than placebo, whereas Acyclovir performs worse than placebo, although more rigorous testing would need to be performed to conclude if these effects are significant.
+
+## Results
+
+```{r, message=FALSE}
+#Converting Full Recovery to Factor for GLM
+data <- data %>%
+  mutate(Recovery = factor(Full.Recovery.in.3.Months, 
+                          levels = c("No", "Yes")))
+model <- glm(Recovery ~ Received.Prednisolone * Received.Acyclovir,
+             family = binomial, data = data)
+
+#Calculates coefficients and Confidence Intervals
+results <- exp(cbind(
+  OR = coef(model),
+  confint(model)
+))
+```
+
+```{r}
+knitr::kable(results, digits = 2,
+             caption = "Odds Ratios (OR) with 95% CIs")
+```
+
+
+```{r}
+pred_data <- expand.grid(
+  Received.Prednisolone = c("No", "Yes"),
+  Received.Acyclovir = c("No", "Yes")
+)
+
+preds <- predict(model, newdata = pred_data, 
+                 type = "response", se.fit = TRUE)
+pred_data$prob <- preds$fit
+pred_data$lower <- preds$fit - 1.96*preds$se.fit
+pred_data$upper <- preds$fit + 1.96*preds$se.fit
+
+ggplot(pred_data, 
+       aes(x = factor(Received.Prednisolone, 
+                    labels = c("No Prednisolone", "Prednisolone")),
+           y = prob,
+           color = factor(Received.Acyclovir,
+                        labels = c("No Acyclovir", "Acyclovir")))) +
+  geom_point(size = 3, position = position_dodge(width = 0.3)) +
+  geom_errorbar(aes(ymin = lower, ymax = upper),
+                width = 0.1, position = position_dodge(width = 0.3)) +
+  scale_y_continuous(labels = scales::percent_format(),
+                    limits = c(0, 1)) +
+  scale_color_manual(values = c("#E69F00", "#56B4E9")) +
+  labs(
+    title = "Predicted Recovery Probability by Treatment",
+    subtitle = "With 95% Confidence Intervals",
+    x = "Prednisolone Treatment",
+    y = "Probability of Full Recovery (Yes)",
+    color = "Acyclovir Treatment"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+The model used is logistic regression using the interaction term between the two treatments. This model is used because the outcome is binary. The model is also highly interpretable and allows us to study how treatment effects recovery odds.
+
+#### Findings
+#### Prednisolone
+ * OR = `r round(results[2,1], 2)` (95% CI: `r round(results[2,2], 2)`-`r round(results[2,3], 2)`)
+ * Patients receiving Prednisolone had `r round(results[2,1], 1)` times higher odds of recovery
+
+#### Acyclovir
+ * OR = `r round(results[3,1], 2)` (95% CI: `r round(results[3,2], 2)`-`r round(results[3,3], 2)`)
+ * moderate increase in recovery odds
+  
+#### Interaction
+ * OR = `r round(results[4,1], 2)` (95% CI: `r round(results[4,2], 2)`-`r round(results[4,3], 2)`)
+ * No evidence of synergistic effects due to 1 being contained within the 95% confidence interval
+
+## Discussion
+
+#### Summary
+<br>
+The data for this analysis was obtained via Kaggle, and was simulated based on the findings of *Early Treatment with Prednisolone or Acyclovir in Bell's Palsy* by Sullivan et al (2007). We performed a logistic regression on our dataset due to the ease of explanation, which is extremely important in the healthcare field due to both ethical and legal concerns. We found that Prednisolone Monotherapy was the best treatment, and Acyclovir Monotherapy was the worst treatment.
+
+#### Assumptions
+<br>
+Independence: Independence was controlled for as this data was generated based on the results of a randomized double-blind experiment where assignments were done independently of one another. 
+
+Distributional Assumptions: The model assumes a binomial distribution of outcomes for recovery status after 3 months. Normality is required for sampling distribution of parameter estimates, which is achieved through central limit theorem (n=`r nrow(data)`).
+
+Parameter Assumptions: Log-Odds of recovery are assumed to be linear in predictors, which is validated by the lack of significance in the interaction between drug treatments (Interaction OR = `r round(results[4,1], 2)`).
+
+#### Generalizability and Causality
+<br>
+This dataset can be generalized to a broader audience. The sample was taken from a variety of patients with early Bell's Palsy, 72 hours within presentation of symptoms with no pre-existing facial nerve damage. It is not generalizable to individuals who do not meet the inclusion criteria.
+
+We are able to conclude a causal effect between treatment and outcome. This was a double-blind experiment, which is the gold standard for medical trials for establishing a causal relationship. The odds ratio can be interpreted as the causal effect for each treamtnet.
+
